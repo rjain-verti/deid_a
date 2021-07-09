@@ -18,19 +18,25 @@
 
 package com.github.susom.starr.deid;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
-import com.google.gson.Gson;
-
+import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.FileWriter;
 import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.PrintWriter;
 import java.io.Serializable;
+import java.io.UnsupportedEncodingException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -55,8 +61,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 //import com.google.gson.*;
 
-import com.fasterxml.jackson.dataformat.csv.CsvMapper;
-import com.fasterxml.jackson.dataformat.csv.CsvSchema;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
+import com.google.gson.Gson;
 
 /**
  * Deid Pipeline.
@@ -120,14 +127,33 @@ public class Main implements Serializable {
 
     File input1 = new File(input);
  // rahul starts
+    File output1 = new File(options.getOutputResource().get());
+	try(Stream<Path> walk = Files.walk(Paths.get(output1.getAbsolutePath()))){
+    	walk.filter(Files::isRegularFile)
+    	.map(Path::toFile)
+    	.forEach(File::delete);
+    } catch (IOException e) {
+    	e.printStackTrace();
+    }
 	Path path = Paths.get(input1.getAbsolutePath());
 	Gson gson = new Gson();
 	List<String> csvjsonStrings = new ArrayList<String>();
+	List<FileHeaders> fileHeaders = new ArrayList<FileHeaders>();
+	
+
+
 	if (input1.isFile()) {
 		// read file contents
-		try (Stream<String> lines = Files.lines(Paths.get(input))) {
-			populateList(gson, csvjsonStrings, path, lines);
-		} catch (IOException e) {
+		FileInputStream fstream;
+		try {
+			fstream = new FileInputStream(path.toString());
+			InputStreamReader is = new InputStreamReader(fstream, "UTF-8");
+			populateList(gson,csvjsonStrings,path,is);
+		} catch (FileNotFoundException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		} catch (UnsupportedEncodingException e) {
+			// TODO Auto-generated catch block
 			e.printStackTrace();
 		}
 	}
@@ -138,23 +164,29 @@ public class Main implements Serializable {
 			fileResult = walk.filter(Files::isRegularFile).collect(Collectors.toList());
 		}
 		fileResult.parallelStream().forEach(fl -> {
-			try (Stream<String> stream = Files.lines(fl)) {
-				populateList(gson, csvjsonStrings, fl, stream);
-			} catch (IOException e) {
+			FileInputStream fstream;
+			try {
+				fstream = new FileInputStream(fl.toString());
+				InputStreamReader is = new InputStreamReader(fstream, "UTF-8");
+				populateList(gson,csvjsonStrings,fl,is);
+			} catch (FileNotFoundException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			} catch (UnsupportedEncodingException e) {
+				// TODO Auto-generated catch block
 				e.printStackTrace();
 			}
 		});
 	}
- // rahul ends   
+ 
 //    CsvSchema csvSchema = CsvSchema.builder().setUseHeader(true).build();
 //    CsvMapper csvMapper = new CsvMapper();
 //    List<Object> readAll = csvMapper.readerFor(Map.class).with(csvSchema).readValues(input1).readAll();
 //    List<String> csvjsonStrings = readAll.stream()
 //    .map(obj ->new Gson().toJson(obj))
 //    .collect(Collectors.toList());
-    
-    
-
+//     rahul ends  
+   
     //start the work
     Pipeline p = Pipeline.create(options);
     PCollectionTuple result =
@@ -210,14 +242,73 @@ public class Main implements Serializable {
     if (!isTemplateCreationRun(args)) {
       pipelineResult.waitUntilFinish();
     }
+    //rahul starts
+  
+    if (output1.isDirectory()) {
+    	try (Stream<Path> walk = Files.walk(Paths.get(output1.getAbsolutePath()))) {
+    		fileResult = walk.filter(Files::isRegularFile).collect(Collectors.toList());
+    	}
+    	fileResult.parallelStream().forEach(fl -> {
+    		try (FileInputStream fstream = new FileInputStream(fl.toString())){
+    			InputStreamReader is = new InputStreamReader(fstream, "UTF-8");
+    			populateListOfFileHeaders(is,fileHeaders,fl);
+    		} catch (FileNotFoundException e) {
+    			// TODO Auto-generated catch block
+    			e.printStackTrace();
+    		} catch (UnsupportedEncodingException e) {
+    			// TODO Auto-generated catch block
+    			e.printStackTrace();
+    		} catch (IOException e1) {
+    			// TODO Auto-generated catch block
+    			e1.printStackTrace();
+    		} 
+
+    	});
+    }    
+    try(Stream<Path> walk = Files.walk(Paths.get(output1.getAbsolutePath()))){
+    	walk.filter(Files::isRegularFile)
+    	.map(Path::toFile)
+    	.forEach(File::delete);
+    } catch (IOException e) {
+    	e.printStackTrace();
+    }
+    fileHeaders.removeIf(Objects::isNull);
+    fileHeaders.parallelStream().forEach(f -> {
+    	File fil = new File(output1.getAbsolutePath()+File.separator+f.getId());
+    	try {
+    		fil.createNewFile();
+    		FileWriter fileWriter = new FileWriter(fil);
+    		PrintWriter printWriter = new PrintWriter(fileWriter);
+    		printWriter.print(f.getTranscription());
+    		printWriter.close();
+    	} catch (IOException e) {
+    		// TODO Auto-generated catch block
+    		e.printStackTrace();
+    	}
+
+    });
   }
 
-private void populateList(Gson gson, List<String> csvjsonStrings, Path fl, Stream<String> stream) {
-	String streamToString = stream
-			.collect(Collectors.joining());		
-	String jsonInString = gson.toJson(new FileHeaders(fl.getFileName().toString(), streamToString));
-	csvjsonStrings.add(jsonInString);
+private void populateList(Gson gson, List<String> csvjsonStrings, Path path,InputStreamReader is) {
+	  // TODO Auto-generated method stub	  
+	  String jsonInString = gson.toJson(new FileHeaders(null, new BufferedReader(is)
+			  .lines().collect(Collectors.joining("\n")),null,null,path.getFileName().toString()));
+	  csvjsonStrings.add(jsonInString);
 }
+
+
+private void populateListOfFileHeaders(InputStreamReader is, List<FileHeaders> fileheaders, Path fl) {
+	// TODO Auto-generated method stub
+	Gson gson = new Gson();
+	String collect = new BufferedReader(is).lines().collect(Collectors.joining("\n"));
+	List<String> split =  Arrays.asList(collect.split("\\r?\\n"));
+	split.stream().forEach(sp ->{
+		FileHeaders fromJson = gson.fromJson(sp, FileHeaders.class);
+		fileheaders.add(fromJson);
+	});
+
+}
+// rahul ends
 
   private static boolean isTemplateCreationRun(String[] args) {
     for (String arg : args) {
